@@ -1,34 +1,44 @@
-# SonicVeil
+# Secret.ly
 
-Dual-mode steganography platform — hide encrypted messages in images and audio, with forensic detection. Final-year cybersecurity project demo.
+A modern steganography platform built for secure and invisible communication.
 
-## Stack
+Secret.ly allows users to hide secret messages inside images and audio files using advanced LSB steganography techniques with optional encryption for enhanced privacy. Designed with a futuristic cyber-inspired interface, the platform focuses on both usability and security while running entirely client-side.
 
-- React 18 + Vite 5
-- Tailwind CSS 3 + shadcn-style UI
-- Web Crypto API (Fernet-style AES-128-CBC + HMAC)
-- Client-side only — no backend
+## Features
 
-## Setup
+* 🔒 Encrypted Steganography
+  Hide AES-encrypted messages inside media files using password protection.
 
-```bash
-npm install
-npm run dev
-```
+* 🌐 Standard LSB Mode
+  Compatible with traditional steganography tools and decoders.
 
-Open the URL shown in the terminal (typically `http://localhost:5173`).
+* 🖼️ Image Steganography
+  Embed hidden data inside PNG, JPG, WEBP, and BMP images.
 
-## Build
+* 🔊 Audio Steganography
+  Hide messages inside WAV audio using PCM-based LSB encoding.
 
-```bash
-npm run build
-npm run preview
-```
+* 🧠 Intelligent Image Analysis
+  Detect texture, edge density, complexity, and ROI heatmaps to identify ideal carrier images.
 
-## Tabs
+* 📊 Steganalysis & Detection
+  Includes live statistical analysis and attack simulation tools.
 
-1. **Image Hide** — ROI-guided LSB + encryption
-2. **Image Reveal** — extract and decrypt
-3. **Audio Hide** — LSB in PCM (download WAV)
-4. **Audio Reveal** — extract from stego audio
-5. **Detector** — statistical steganalysis + live attack demo
+* 💬 Built-in Secure Sharing
+  Send stego images directly through integrated chat functionality.
+
+* ⚡ Fully Client-Side
+  No external processing — encryption and embedding happen entirely in the browser.
+
+## Tech Stack
+
+* React + Vite
+* Tailwind CSS
+* Three.js
+* Supabase
+* Web Crypto API
+* Recharts
+
+## Vision
+
+Secret.ly is designed to make digital privacy visually intuitive, modern, and accessible — blending cybersecurity concepts with interactive user experience and futuristic design.
