@@ -31,7 +31,8 @@ export default function AudioRevealTab() {
   };
 
   const handleExtract = async () => {
-    if (!audio || !password) return;
+    if (!audio) { toast.error('Upload a stego audio file first'); return; }
+if (password.length < 4) { toast.error('Password must be at least 4 characters'); return; }
     setBusy(true);
     setResult(null);
     setError(null);
@@ -80,7 +81,7 @@ export default function AudioRevealTab() {
       </GlowCard>
 
       <GlowCard title="Extracted message">
-        <ShinyButton size="lg" className="mb-4 w-full" disabled={busy || !audio} onClick={handleExtract}>
+        <ShinyButton size="lg" className="mb-4 w-full" disabled={busy || !file || password.length < 4} onClick={handleExtract}>
           Extract Hidden Message
         </ShinyButton>
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowLeft, Download, KeyRound, MessageSquare, Search, Send, UserPlus } from 'lucide-react';
+import { ArrowLeft, Download, KeyRound, MessageSquare, Search, Send, Trash2, UserPlus } from 'lucide-react';
 import GlowCard from '@/components/layout/GlowCard';
 import ShinyButton from '@/components/shared/ShinyButton';
 import { useAuth } from '@/hooks/useAuth';
@@ -23,85 +23,83 @@ export default function ChatTab({ onDecryptImage }) {
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [imgUrls, setImgUrls] = useState({});
+  const [deletingId, setDeletingId] = useState(null);
   const scrollRef = useRef(null);
 
-  // Load conversations
-  useEffect(() => {
+  const loadConversations = async () => {
     if (!user) return;
-    let cancelled = false;
-    (async () => {
-      const { data, error } = await supabase
-        .from('conversations').select('*')
-        .or(`user_a.eq.${user.id},user_b.eq.${user.id}`)
-        .order('last_message_at', { ascending: false });
-      if (error) return toast.error(error.message);
-      const convs = data ?? [];
-      const peerIds = convs.map((c) => (c.user_a === user.id ? c.user_b : c.user_a));
-      let peers = [];
-      if (peerIds.length) {
-        const { data: p } = await supabase.from('profiles')
-          .select('id, username, display_name, email').in('id', peerIds);
-        peers = p ?? [];
-      }
-      if (cancelled) return;
-      const merged = convs.map((c) => ({
-        ...c,
-        peer: peers.find((pp) => pp.id === (c.user_a === user.id ? c.user_b : c.user_a)),
-      }));
-      setConversations(merged);
-      if (!activeId && merged.length) setActiveId(merged[0].id);
-    })();
-    return () => { cancelled = true; };
-  }, [user]);
+    const { data, error } = await supabase
+      .from('conversations').select('*')
+      .or(`user_a.eq.${user.id},user_b.eq.${user.id}`)
+      .order('last_message_at', { ascending: false });
+    if (error) return;
+    const convs = data ?? [];
+    const peerIds = convs.map((c) => (c.user_a === user.id ? c.user_b : c.user_a));
+    let peers = [];
+    if (peerIds.length) {
+      const { data: p } = await supabase.from('profiles')
+        .select('id, username, display_name, email').in('id', peerIds);
+      peers = p ?? [];
+    }
+    const merged = convs.map((c) => ({
+      ...c,
+      peer: peers.find((pp) => pp.id === (c.user_a === user.id ? c.user_b : c.user_a)),
+    }));
+    setConversations(merged);
+    if (!activeId && merged.length) setActiveId(merged[0].id);
+  };
 
-  // Realtime: conversation list
+  useEffect(() => { loadConversations(); }, [user]);
+
+  // Realtime conversations
   useEffect(() => {
     if (!user) return;
-    const channel = supabase.channel('conv-list-' + user.id)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, async () => {
-        const { data } = await supabase.from('conversations').select('*')
-          .or(`user_a.eq.${user.id},user_b.eq.${user.id}`)
-          .order('last_message_at', { ascending: false });
-        const convs = data ?? [];
-        const peerIds = convs.map((c) => (c.user_a === user.id ? c.user_b : c.user_a));
-        const { data: p } = await supabase.from('profiles')
-          .select('id, username, display_name, email')
-          .in('id', peerIds.length ? peerIds : ['00000000-0000-0000-0000-000000000000']);
-        const peers = p ?? [];
-        setConversations(convs.map((c) => ({
-          ...c,
-          peer: peers.find((pp) => pp.id === (c.user_a === user.id ? c.user_b : c.user_a)),
-        })));
-      }).subscribe();
+    const channel = supabase.channel('conv-' + user.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, loadConversations)
+      .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
-  // Load + subscribe messages
+  // Load messages
   useEffect(() => {
     if (!activeId) { setMessages([]); return; }
     let cancelled = false;
-    (async () => {
-      const { data, error } = await supabase.from('messages').select('*')
-        .eq('conversation_id', activeId).order('created_at', { ascending: true });
-      if (error) return toast.error(error.message);
-      if (cancelled) return;
-      setMessages(data ?? []);
-    })();
+    supabase.from('messages').select('*')
+      .eq('conversation_id', activeId)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (error || cancelled) return;
+        setMessages(data ?? []);
+      });
+    return () => { cancelled = true; };
+  }, [activeId]);
+
+  // Realtime messages — INSERT + DELETE
+  useEffect(() => {
+    if (!activeId) return;
     const channel = supabase.channel('msgs-' + activeId)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${activeId}` },
         (payload) => {
-          setMessages((m) => {
-            const next = payload.new;
-            if (m.some((x) => x.id === next.id)) return m;
-            return [...m, next];
+          setMessages((prev) => {
+            // Replace temp message if exists, otherwise add
+            const withoutTemp = prev.filter((m) => !m._temp);
+            if (withoutTemp.some((m) => m.id === payload.new.id)) return prev;
+            return [...withoutTemp, payload.new];
           });
         }
-      ).subscribe();
-    return () => { cancelled = true; supabase.removeChannel(channel); };
+      )
+      .on('postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'messages', filter: `conversation_id=eq.${activeId}` },
+        (payload) => {
+          setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, [activeId]);
 
-  // Resolve signed image URLs
+  // Resolve image URLs
   useEffect(() => {
     const missing = messages.filter((m) => m.image_path && !imgUrls[m.image_path]);
     if (!missing.length) return;
@@ -112,7 +110,7 @@ export default function ChatTab({ onDecryptImage }) {
       }
       if (Object.keys(updates).length) setImgUrls((u) => ({ ...u, ...updates }));
     })();
-  }, [messages, imgUrls]);
+  }, [messages]);
 
   // Auto scroll
   useEffect(() => {
@@ -145,8 +143,47 @@ export default function ChatTab({ onDecryptImage }) {
     if (!user || !activeId || !draft.trim()) return;
     const text = draft.trim();
     setDraft('');
-    try { await sendMessage({ conversationId: activeId, senderId: user.id, content: text }); }
-    catch (e) { toast.error(e.message); }
+    // Optimistic update — show immediately
+    const tempId = 'temp-' + Date.now();
+    const tempMsg = {
+      id: tempId,
+      conversation_id: activeId,
+      sender_id: user.id,
+      content: text,
+      image_path: null,
+      image_kind: null,
+      created_at: new Date().toISOString(),
+      _temp: true,
+    };
+    setMessages((prev) => [...prev, tempMsg]);
+    try {
+      const { error } = await supabase.from('messages').insert({
+        conversation_id: activeId,
+        sender_id: user.id,
+        content: text,
+      });
+      if (error) throw error;
+      // Realtime INSERT will replace the temp message
+    } catch (e) {
+      toast.error(e.message);
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      setDraft(text);
+    }
+  };
+
+  const onUnsend = async (msg) => {
+    if (msg.sender_id !== user?.id || msg._temp) return;
+    setDeletingId(msg.id);
+    try {
+      const { error } = await supabase.from('messages').delete().eq('id', msg.id);
+      if (error) throw error;
+      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+      toast.success('Message unsent');
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const downloadImage = async (path) => {
@@ -154,11 +191,10 @@ export default function ChatTab({ onDecryptImage }) {
       const url = imgUrls[path] ?? (await getSignedImageUrl(path));
       const res = await fetch(url);
       const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = objectUrl; a.download = 'secret-stego.png';
+      a.href = URL.createObjectURL(blob);
+      a.download = 'secret-stego.png';
       document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
     } catch { toast.error('Download failed'); }
   };
 
@@ -175,7 +211,7 @@ export default function ChatTab({ onDecryptImage }) {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[300px_1fr]">
       {/* Sidebar */}
       <GlowCard className={cn(activeId ? 'hidden lg:block' : 'block')}>
-        <div className="flex h-[70vh] max-h-[600px] min-h-[420px] flex-col">
+        <div className="flex h-[70vh] max-h-[600px] min-h-[420px] flex-col p-4">
           <header className="mb-3 flex items-center gap-2 text-primary">
             <MessageSquare className="h-4 w-4" />
             <h2 className="text-sm uppercase tracking-widest">Chats</h2>
@@ -185,9 +221,8 @@ export default function ChatTab({ onDecryptImage }) {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by username or email"
-              className="w-full rounded-xl border bg-input/60 py-2 pl-10 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/40"
-              style={{ borderColor: 'hsl(0 60% 20%)' }}
+              placeholder="Search username or email"
+              className="w-full rounded-xl border border-border/60 bg-input/60 py-2 pl-10 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/40"
             />
           </div>
           <div className="flex-1 space-y-1 overflow-y-auto pr-1">
@@ -198,19 +233,19 @@ export default function ChatTab({ onDecryptImage }) {
                 {results.map((p) => (
                   <button key={p.id} onClick={() => startChatWith(p)}
                     className="flex w-full items-center gap-3 rounded-lg border border-transparent p-2 text-left transition hover:border-border hover:bg-card/40">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-primary text-xs font-bold text-primary-foreground">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-primary text-xs font-bold text-primary-foreground">
                       {p.username[0]?.toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">@{p.username}</p>
                       <p className="truncate text-[11px] text-muted-foreground">{p.email}</p>
                     </div>
-                    <UserPlus className="h-4 w-4 text-primary" />
+                    <UserPlus className="h-4 w-4 shrink-0 text-primary" />
                   </button>
                 ))}
               </>
             ) : conversations.length === 0 ? (
-              <p className="px-2 text-xs text-muted-foreground">Search for a user above to start a chat</p>
+              <p className="px-2 text-xs text-muted-foreground">Search for a user to start chatting</p>
             ) : (
               conversations.map((c) => (
                 <button key={c.id} onClick={() => setActiveId(c.id)}
@@ -218,7 +253,7 @@ export default function ChatTab({ onDecryptImage }) {
                     'flex w-full items-center gap-3 rounded-lg border p-2 text-left transition',
                     activeId === c.id ? 'border-primary/60 bg-primary/10' : 'border-transparent hover:border-border hover:bg-card/40'
                   )}>
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-primary text-xs font-bold text-primary-foreground">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-primary text-xs font-bold text-primary-foreground">
                     {c.peer?.username?.[0]?.toUpperCase() ?? '?'}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -237,14 +272,14 @@ export default function ChatTab({ onDecryptImage }) {
       {/* Messages */}
       <GlowCard className={cn(activeId ? 'block' : 'hidden lg:block')}>
         <div className="flex h-[70vh] max-h-[600px] min-h-[420px] flex-col -m-6">
-          <header className="border-b p-4" style={{ borderColor: 'hsl(0 60% 20%)' }}>
+          <header className="border-b border-border/40 p-4">
             {active ? (
               <div className="flex items-center gap-3">
                 <button type="button" onClick={() => setActiveId(null)}
                   className="lg:hidden -ml-1 mr-1 rounded-md p-1 text-muted-foreground hover:text-foreground">
                   <ArrowLeft className="h-4 w-4" />
                 </button>
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-primary text-sm font-bold text-primary-foreground">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-primary text-sm font-bold text-primary-foreground">
                   {active.peer?.username?.[0]?.toUpperCase() ?? '?'}
                 </div>
                 <div>
@@ -261,20 +296,32 @@ export default function ChatTab({ onDecryptImage }) {
             {messages.map((m) => {
               const mine = m.sender_id === user?.id;
               const url = m.image_path ? imgUrls[m.image_path] : null;
+              const isDeleting = deletingId === m.id;
               return (
-                <div key={m.id} className={cn('flex', mine ? 'justify-end' : 'justify-start')}>
+                <div key={m.id} className={cn('group flex items-end gap-1', mine ? 'justify-end' : 'justify-start')}>
+                  {mine && (
+                    <button
+                      onClick={() => onUnsend(m)}
+                      disabled={isDeleting || m._temp}
+                      className="mb-1 shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:text-red-400 disabled:opacity-30"
+                      title="Unsend"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                   <div className={cn(
-                    'max-w-[80%] space-y-2 rounded-2xl px-4 py-2 text-sm',
-                    mine ? 'bg-gradient-primary text-primary-foreground' : 'border border-border bg-card/60 text-foreground'
+                    'max-w-[80%] space-y-2 rounded-2xl px-4 py-2 text-sm transition-opacity',
+                    mine ? 'bg-gradient-primary text-primary-foreground' : 'border border-border bg-card/60 text-foreground',
+                    isDeleting && 'opacity-40',
+                    m._temp && 'opacity-70'
                   )}>
                     {m.content && <p className="whitespace-pre-wrap break-words">{m.content}</p>}
                     {m.image_path && (
                       <div className="space-y-2">
-                        {url ? (
-                          <img src={url} alt="stego" className="max-h-64 rounded-lg ring-1 ring-border" />
-                        ) : (
-                          <div className="h-24 w-48 animate-pulse rounded-lg bg-muted/30" />
-                        )}
+                        {url
+                          ? <img src={url} alt="stego" className="max-h-64 rounded-lg ring-1 ring-border" />
+                          : <div className="h-24 w-48 animate-pulse rounded-lg bg-muted/30" />
+                        }
                         <div className="flex flex-wrap gap-1.5">
                           <button onClick={() => downloadImage(m.image_path)}
                             className={cn(
@@ -296,7 +343,7 @@ export default function ChatTab({ onDecryptImage }) {
                       </div>
                     )}
                     <p className="text-right text-[10px] opacity-60">
-                      {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {m._temp ? 'sending…' : new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </p>
                   </div>
                 </div>
@@ -304,21 +351,20 @@ export default function ChatTab({ onDecryptImage }) {
             })}
             {active && messages.length === 0 && (
               <p className="text-center text-xs text-muted-foreground">
-                No messages yet — say hi or send a stego image from the Image Hide tab.
+                No messages yet — say hi or send a stego image from Image Hide tab.
               </p>
             )}
           </div>
 
           {active && (
-            <div className="flex items-end gap-2 border-t p-3" style={{ borderColor: 'hsl(0 60% 20%)' }}>
+            <div className="flex items-end gap-2 border-t border-border/40 p-3">
               <textarea
                 rows={1}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
                 placeholder="Type a message…"
-                className="flex-1 resize-none rounded-xl border bg-input/60 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
-                style={{ borderColor: 'hsl(0 60% 20%)' }}
+                className="flex-1 resize-none rounded-xl border border-border/60 bg-input/60 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
               />
               <ShinyButton onClick={onSend} disabled={!draft.trim()}>
                 <Send className="h-4 w-4" />

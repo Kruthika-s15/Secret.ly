@@ -51,10 +51,9 @@ export default function AudioHideTab() {
   };
 
   const handleHide = async () => {
-    if (!audio || !message || !password) {
-      toast.error('Audio, message, and password required');
-      return;
-    }
+  if (!audio) { toast.error('Upload an audio file first'); return; }
+  if (!message) { toast.error('Enter a secret message'); return; }
+  if (password.length < 4) { toast.error('Password must be at least 4 characters'); return; }
     if (msgBytes > capacity) {
       toast.error('Message exceeds audio capacity');
       return;
@@ -134,7 +133,7 @@ export default function AudioHideTab() {
         <ShinyButton
           size="lg"
           className="mt-4 w-full"
-          disabled={busy || !audio || !message || !password}
+          disabled={busy || !audio || !message || password.length < 4}
           onClick={handleHide}
         >
           Hide in Audio
