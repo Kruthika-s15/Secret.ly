@@ -140,36 +140,26 @@ export default function ChatTab({ onDecryptImage }) {
   };
 
   const onSend = async () => {
-    if (!user || !activeId || !draft.trim()) return;
-    const text = draft.trim();
-    setDraft('');
-    // Optimistic update — show immediately
-    const tempId = 'temp-' + Date.now();
-    const tempMsg = {
-      id: tempId,
+  if (!user || !activeId || !draft.trim()) return;
+  const text = draft.trim();
+  setDraft('');
+  try {
+    const { data, error } = await supabase.from('messages').insert({
       conversation_id: activeId,
       sender_id: user.id,
       content: text,
-      image_path: null,
-      image_kind: null,
-      created_at: new Date().toISOString(),
-      _temp: true,
-    };
-    setMessages((prev) => [...prev, tempMsg]);
-    try {
-      const { error } = await supabase.from('messages').insert({
-        conversation_id: activeId,
-        sender_id: user.id,
-        content: text,
-      });
-      if (error) throw error;
-      // Realtime INSERT will replace the temp message
-    } catch (e) {
-      toast.error(e.message);
-      setMessages((prev) => prev.filter((m) => m.id !== tempId));
-      setDraft(text);
-    }
-  };
+    }).select().single();
+    if (error) throw error;
+    // Add directly — don't wait for realtime
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === data.id)) return prev;
+      return [...prev, data];
+    });
+  } catch (e) {
+    toast.error(e.message);
+    setDraft(text);
+  }
+};
 
   const onUnsend = async (msg) => {
     if (msg.sender_id !== user?.id || msg._temp) return;
